@@ -20,14 +20,10 @@ e_earth = 0.017                     # eccentricity of earth's orbit (in Newtonia
 # here x = angular position (phi)
 # and y = radial position (r)
 
-# Defining the derivative function
-# here x = angular position (phi)
-# and y = radial position (r)
-
 def ddx(x,y):
     u = y[0]
     v = y[1]
-    return np.array([v,3*G*M*u**2/c**2-u])
+    return np.array([v,G*M/L**2+3*G*M*u**2/c**2-u])
 
 # Defining RK4 method
 
@@ -50,13 +46,14 @@ def Caller(mtd,f,xs,y_ini,h):
         y = mtd(ddx,x,y,h)
     return ys
 
-# Initial Conditions
-
 # Initial Coditions
 
-r0 = 1.50001*r_s                              # Initial Radial Position
+# For Earth :
+
+r0 = 20*r_s                              # Initial Radial Position
 u0 = 1/r0
 v0 = 0                                          # Initial Radial Velocity
+L = 2.4*10**12                                   # Angular Momentum
 y_ini = np.array([u0,v0])
 
 # Time step
@@ -65,7 +62,7 @@ h = 0.0001
 
 # Getting a solution
 
-n = 2.0                                        # Number of full circles
+n = 2.4                                       # Number of full circles
 
 xs = np.arange(0,2*np.pi*n,h)                # Stores the angular coordinates
 ys = Caller(rk4,ddx,xs,y_ini,h)              # Stores the radial coordinates and radial velocities
@@ -77,8 +74,15 @@ r = r/(1*AU)                                 # Normalizes the radial distance w.
 x_ax = r * np.cos(xs)
 y_ax = r * np.sin(xs)
 
+# Find maximum extent for plot limits
+# l = max(abs(x_ax).max(), abs(y_ax).max())
+
+l = 4*10**-7
+
 # Animation
 fig, ax = plt.subplots()
+# ax.set_xlim(-l * 3, l * 2)
+# ax.set_ylim(-l * 3, l * 2)
 
 # Create a point (ball) to represent the planet
 planet, = ax.plot([], [], 'bo', ms=5)  # 'bo' means blue color and 'ms' stands for marker size
@@ -89,14 +93,15 @@ pps = np.arange(0,2*np.pi+0.01,0.01)
 xxs = [r_s/AU*np.cos(i) for i in pps]
 yys = [r_s/AU*np.sin(i) for i in pps]
 
-l = 10**-7.2
-
 plt.plot(xxs,yys,c='red',linestyle = 'dotted',label="Schwarzschild Radius")
+
+# plt.plot([-l * 1.2, l * 1.2], [0, 0], linestyle='dashed')
+# plt.plot([0, 0], [-l * 1.2, l * 1.2], linestyle='dashed')
 plt.scatter([0], [0], marker='.', c='black', label="Sun")
-plt.plot(x_ax,y_ax,c='orange',linestyle = 'dashed',label="Photon's Path")
+plt.plot(x_ax,y_ax,c='gray',linestyle = 'dashed')
 plt.xlabel("Distance (in A.U.)")
 plt.ylabel("Distance (in A.U.)")
-plt.title("Photon Orbit in Schwarzschild Metric")
+plt.title("Planetary Orbit in Schwarzschild Metric")
 plt.grid()
 plt.xlim(-l,l)
 plt.ylim(-l,l)
@@ -111,7 +116,14 @@ def update(frame):
     planet.set_data([x_ax[frame]], [y_ax[frame]])
     return planet,
 
-animation = FuncAnimation(fig, update, frames=np.arange(0, len(x_ax), 700), init_func=init, interval=10, blit=True)
+# Fake Time (I tried smth, but didn't work)
+
+# t_fake = 1/r
+# t_max = max(t_fake)
+# t_fake = t_fake/t_max
+# print(t_fake)
+
+animation = FuncAnimation(fig, update, frames=np.arange(0, len(x_ax), 600), init_func=init, interval=10, blit=True)
 
 # Save the animation
 
