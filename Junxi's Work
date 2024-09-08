@@ -1,0 +1,448 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Jun 27 11:12:36 2024
+
+@author: MarcoMa2003
+"""
+
+import numpy as np
+import scipy
+from scipy.optimize import brentq
+import scipy.ndimage
+import matplotlib.pyplot as plt
+from scipy.integrate import solve_ivp
+from scipy.optimize import fsolve
+
+
+# calculate simulation time
+import time
+start_time = time.time()
+
+
+#Generic defined constant in the code
+M = 1 # mass of the blackhole
+b_range = (0*M, 100*M) # range of impact parameter
+b_points = 20 #number of sample chosen for impact parameter
+phi_points = 20 #number of sample chosen for azimuthal angle
+t_setup = 1e-9 # the quantum fluctuation coefficient
+theta = 4*np.pi/9 # angle of viewing point
+N = 10**6 # sample to measure arclength
+y0 = np.pi/2
+
+# defines quantum corrected components of the metric
+def f(x):
+    return 1/x*(1/x-1/np.tanh(x))
+
+def h_theta(phi,theta,r,t,M):
+    a = r*np.sin(theta)/2/M
+    return -2*r**2*f(a)
+
+def h_phi(phi,theta,r,t,M):
+    a = r/2/M
+    return -2*r**2*np.sin(theta)**2*f(a)
+
+def h_rr(phi,theta,r,t,M):
+    a = r**2*np.sin(theta)/(2*M)**2
+    return -2/(1-2*M/r)**2*f(a)
+
+def h_tt(phi,theta,r,t,M):
+    a = r**2*np.sin(theta)/(2*M)**2
+    return -2*2*M/r*f(a)
+
+"""
+def dh_tt(r,M):
+
+    return 10*(2*M)**5/r**6-48*M**3/(r**4*np.tanh(r**2/4/M**2))-8*M/(r**2*np.sinh(r**2/4/M**2))
+
+def dh_phi(r,M):
+
+    return 4*M/np.tanh(r/2/M) - 4*M*r/np.sinh(r/2/M)
+"""
+
+
+#defining Jacobian in converting spherical coordinate and Cartesian coordinate
+def T(phi,theta,r,t):
+    return np.array([[1,0,0,0],[0,np.cos(phi)*np.sin(theta),r*np.cos(theta)*np.cos(phi),-r*np.sin(theta)*np.sin(phi)]
+            ,[0,np.sin(theta)*np.sin(phi),r*np.sin(phi)*np.cos(theta),r*np.sin(theta)*np.cos(phi)],
+            [0,np.cos(theta),-r*np.sin(theta),0]])
+def J(phi,theta,r,t):
+    return np.linalg.inv(T(phi,theta,r,t))
+
+# Metric to calculate P
+def g00(phi,theta,r,t,M):
+    return -(1-2*M/r-t*h_tt(r, M))
+def g11(phi,theta,r,t,M):
+    return 1/(1-2*M/r)+t*h_rr(r, M)
+def g22(phi,theta,r,t,M):
+    return r**2+t*h_theta(r,M)
+def g33(phi,theta,r,t,M):
+    return r**2*np.sin(theta)**2+t*h_phi(r,M)
+def g(phi,theta,r,t,M):
+    return np.array([[g00(phi,theta,r,t,M),0,0,0],[0,g11(phi,theta,r,t,M),0,0],
+                     [0,0,g22(phi,theta,r,t,M),0],[0,0,0,g33(phi,theta,r,t,M)]])
+def H(phi,theta,r,t,M):
+    H = np.dot(np.transpose(J(phi,theta,r,t)),np.dot(g(phi,theta,r,t,M),J(phi,theta,r,t)));
+    return H
+
+
+
+
+#Calculate gamma via arclength (new)
+def pre_calculation(phi,theta,r,t,M):
+    F = lambda t, s: \
+  np.dot(np.array([[0,1],[0,(2*r**2*np.sin(s[0])*np.cos(s[0]))
+            /(r**2*np.sin(s[0])**2+t_setup*h_phi(phi,theta,r,t,M))*s[1]+
+            (r**2*np.sin(s[0])*np.cos(s[0]))/(r**2+t_setup*h_theta(phi,theta,r,t,M))/s[1]
+            ]]),s)
+    return F
+
+
+
+def function(func):
+    return np.sqrt((func[1])**2+np.sin(func[0])**2)
+
+def simpson38(f,x0,xn,n):
+    # calculating step size
+    h = (xn - x0) / n
+
+    # Finding sum
+    integration = f[0] + f[-1]
+
+    for i in range(1,n):
+
+        if i%3 == 0:
+            integration = integration + 2 * f[i]
+        else:
+            integration = integration + 3 * f[i]
+
+    # Finding final integration value
+    integration = integration * 3 * h / 8
+
+    return integration
+
+
+#Definition of Jacobi Elliptic function
+def F(xi,m):
+
+    return scipy.special.ellipkinc(xi,m)
+
+def K(m):
+
+    return scipy.special.ellipk(m)
+
+#Definition of evaluting Jacobi function
+def P(b,phi,theta,r,t,M):
+    def try2(p):
+        f = (p**2-t*h_phi(phi,theta,r,t,M))/(1-2*M/p-t*h_tt(phi,theta,r,t,M))-b**2
+        return f
+    sol = brentq(try2, 3*M, b_range[1], xtol=2e-20,full_output=False, disp=True)
+    return sol
+
+def Q(b,phi,theta,r,t,M):
+    Qs = (P(b,phi,theta,r,t,M)-2*M)*(P(b,phi,theta,r,t,M)+6*M)
+    return np.sqrt(Qs)
+
+def k_square(b,phi,theta,r,t,M):
+    return (Q(b,phi,theta,r,t,M)-P(b,phi,theta,r,t,M)+6*M)/(2*Q(b,phi,theta,r,t,M))
+
+def xi1(b,phi,theta,r,t,M):
+    return np.arcsin(np.sqrt((Q(b,phi,theta,r,t,M)-P(b,phi,theta,r,t,M)+2*M)
+                             /(Q(b,phi,theta,r,t,M)-P(b,phi,theta,r,t,M)+6*M)))
+
+#Primary orbit
+def u(t,r,M,b,phi,theta):
+    if phi==0:
+        gamma_ = 0
+    if phi > 0 and phi <= np.pi:
+        t_eval = np.linspace(0, phi, N+1)
+        v0 = -1
+        def objective(v0):
+            sol = solve_ivp(pre_calculation(phi,theta,r,t,M), [t_eval[0], t_eval[-1]], \
+                            [y0, v0], t_eval = t_eval,method = 'DOP853')
+            y = sol.y[0]
+            return y[-1] - np.pi/2
+        v0, = fsolve(objective, v0)
+        sol = solve_ivp(pre_calculation(phi,theta,r,t,M), [t_eval[0], t_eval[-1]], \
+                                    [y0, v0], t_eval = t_eval,method = 'DOP853')
+        gamma_ = simpson38(function(sol.y), t_eval[0], t_eval[-1],len(t_eval))
+    if phi > np.pi and phi < 2*np.pi:
+        t_eval = np.linspace(phi, 0, N+1)
+        v0 = -1
+        def objective(v0):
+            sol = solve_ivp(pre_calculation(phi,theta,r,t,M), [t_eval[0], t_eval[-1]], \
+                            [y0, v0], t_eval = t_eval,method = 'DOP853')
+            y = sol.y[0]
+            return y[-1] - np.pi/2
+        v0, = fsolve(objective, v0)
+        sol = solve_ivp(pre_calculation(phi,theta,r,t,M), [t_eval[0], t_eval[-1]], \
+                                    [y0, v0], t_eval = t_eval,method = 'DOP853')
+        gamma_ = simpson38(function(sol.y), t_eval[0], t_eval[-1],len(t_eval))
+    if phi==2*np.pi:
+        gamma_ = 0
+    SN = scipy.special.ellipj(gamma_/2*np.sqrt(Q(b,phi,theta,r,t,M)/P(b,phi,theta,r,t,M))
+            +F(xi1(b,phi,theta,r,t,M),k_square(b,phi,theta,r,t,M)),k_square(b,phi,theta,r,t,M))[0]
+    return (-(Q(b,phi,theta,r,t,M)-P(b,phi,theta,r,t,M)+2*M)/(4*M*P(b,phi,theta,r,t,M))
+            +((Q(b,phi,theta,r,t,M)-P(b,phi,theta,r,t,M)+6*M)/(4*M*P(b,phi,theta,r,t,M)))
+            *SN**2)
+
+#Secondary orbit
+def u1(t,r,M,b,phi,theta):
+    if phi==0:
+        gamma_ = 0
+    if phi > 0 and phi <= np.pi:
+        t_eval = np.linspace(0, phi, N+1)
+        v0 = -1
+        def objective(v0):
+            sol = solve_ivp(pre_calculation(phi,theta,r,t,M), [t_eval[0], t_eval[-1]], \
+                            [y0, v0], t_eval = t_eval,method = 'DOP853')
+            y = sol.y[0]
+            return y[-1] - np.pi/2
+        v0, = fsolve(objective, v0)
+        sol = solve_ivp(pre_calculation(phi,theta,r,t,M), [t_eval[0], t_eval[-1]], \
+                                    [y0, v0], t_eval = t_eval,method = 'DOP853')
+        gamma_ = simpson38(function(sol.y), t_eval[0], t_eval[-1],len(t_eval))
+    if phi > np.pi and phi < 2*np.pi:
+        t_eval = np.linspace(phi, 0, N+1)
+        v0 = -1
+        def objective(v0):
+            sol = solve_ivp(pre_calculation(phi,theta,r,t,M), [t_eval[0], t_eval[-1]], \
+                            [y0, v0], t_eval = t_eval,method = 'DOP853')
+            y = sol.y[0]
+            return y[-1] - np.pi/2
+        v0, = fsolve(objective, v0)
+        sol = solve_ivp(pre_calculation(phi,theta,r,t,M), [t_eval[0], t_eval[-1]], \
+                                    [y0, v0], t_eval = t_eval,method = 'DOP853')
+        gamma_ = simpson38(function(sol.y), t_eval[0], t_eval[-1],len(t_eval))
+    if phi==2*np.pi:
+        gamma_ = 0
+    SN = scipy.special.ellipj((gamma_-2*np.pi)/2*np.sqrt(Q(b,phi,theta,r,t,M)/P(b,phi,theta,r,t,M))
+            +F(xi1(b,phi,theta,r,t,M),k_square(b,phi,theta,r,t,M)),k_square(b,phi,theta,r,t,M))[0]
+    return (-(Q(b,phi,theta,r,t,M)-P(b,phi,theta,r,t,M)+2*M)/(4*M*P(b,phi,theta,r,t,M))
+            +((Q(b,phi,theta,r,t,M)-P(b,phi,theta,r,t,M)+6*M)/(4*M*P(b,phi,theta,r,t,M)))
+            *SN**2)
+
+#define mesh for the primary orbit
+def mesh(b_range,phi_range,b_points,phi_points,t,r,M,theta):
+    b = np.linspace(b_range[0], b_range[1], b_points)
+    phi = np.linspace(phi_range[0], phi_range[1], phi_points)
+    X1, Y1 = custom_transform_secondary(b,phi,theta,t,M,r)
+    Z=np.empty((0,b_points))
+    b = np.linspace(6*M, b_range[1], b_points)
+    for i in phi:
+        array = []
+        for j in b:
+            number = np.real(1/u(t,r,M,j,i,theta))
+            array = np.append(array,number)
+            print(j)
+        Z = np.vstack((Z,array))
+        print(i)
+    return X1, Y1, Z
+
+#define mesh for the secondary orbit
+def mesh1(b_range,phi_range,b_points,phi_points,t,r,M,theta):
+    b = np.linspace(b_range[0], b_range[1], b_points)
+    phi = np.linspace(phi_range[0], phi_range[1], phi_points)
+    X1, Y1 = custom_transform_secondary(b,phi,theta,t,M,r)
+    Z=np.empty((0,b_points))
+    b = np.linspace(6*M, b_range[1], b_points)
+    for i in phi:
+        array = []
+        for j in b:
+            number = np.real(1/u1(t,r,M,j,i,theta))
+            array = np.append(array,number)
+            print(j)
+        Z = np.vstack((Z,array))
+        print(i)
+    return X1, Y1, Z
+
+
+"""
+
+
+#these two functions are used to take out the interested data
+
+def diff_primary(b_range,phi_range,b_points,phi_points,t,r,M,theta):
+    phi = np.linspace(phi_range[0], phi_range[1], phi_points)
+    TRY_Z = np.empty((0,b_points))
+    b = np.linspace(6*M, b_range[1], b_points)
+    for i in phi:
+        print(i)
+        try_array = []
+        for j in b:
+            number = np.real(1/u(t,r,M,j,i,theta))
+            if number <= r +  0.5* M  and number >= r - 0.5*M:
+                try_array = np.append(try_array,number)
+            if number > r +0.5* M  or number < r - 0.5*M:
+                try_array = np.append(try_array,0)
+        TRY_Z = np.vstack((TRY_Z,try_array))
+    return TRY_Z
+
+def diff_secondary(b_range,phi_range,b_points,phi_points,t,r,M,theta):
+    phi = np.linspace(phi_range[0], phi_range[1], phi_points)
+    TRY_Z = np.empty((0,b_points))
+    b = np.linspace(6*M, b_range[1], b_points)
+    for i in phi:
+        try_array = []
+        for j in b:
+            number = np.real(1/u1(t,r,M,j,i,theta))
+            if number <= r +  0.5* M  and number >= r - 0.5*M:
+                try_array = np.append(try_array,number)
+            if number > r +0.5* M  or number < r - 0.5*M:
+                try_array = np.append(try_array,0)
+        TRY_Z = np.vstack((TRY_Z,try_array))
+    return TRY_Z
+
+
+def diff1_primary(b_range,phi_range,b_points,phi_points,t,r_array,M,theta):
+    phi = np.linspace(phi_range[0], phi_range[1], phi_points)
+    TRY_Z = np.zeros((phi_points,b_points))
+    b = np.linspace(6*M, b_range[1], b_points)
+    for r in r_array:
+        try_stack = np.empty((0,b_points))
+        for i in phi:
+            print(i)
+            try_array = []
+            for j in b:
+                number = np.real(1/u(t,r,M,j,i,theta))
+                if number <= r +  0.5* M  and number >= r - 0.5*M:
+                    try_array = np.append(try_array,number)
+                if number > r + 0.5* M  or number < r - 0.5*M:
+                    try_array = np.append(try_array,0)
+            try_stack = np.vstack((try_stack,try_array))
+        TRY_Z = TRY_Z + try_stack
+    return TRY_Z
+
+def diff1_secondary(b_range,phi_range,b_points,phi_points,t,r_array,M,theta):
+    phi = np.linspace(phi_range[0], phi_range[1], phi_points)
+    TRY_Z = np.zeros((phi_points,b_points))
+    b = np.linspace(6*M, b_range[1], b_points)
+    for r in r_array:
+        try_stack = np.empty((0,b_points))
+        for i in phi:
+            try_array = []
+            for j in b:
+                number = np.real(1/u1(t,r,M,j,i,theta))
+                if number <= r +  0.5* M  and number >= r - 0.5*M:
+                    try_array = np.append(try_array,number)
+                if number > r + 0.5* M  or number < r - 0.5*M:
+                    try_array = np.append(try_array,0)
+            try_stack = np.vstack((try_stack,try_array))
+        TRY_Z = TRY_Z + try_stack
+    return TRY_Z
+
+
+#custom_transform orbit,here I also set up the test for showing C1 and C2 are equal
+
+
+def custom_transform(b,phi,theta,t,M,r):
+    X1=np.empty((0,len(b)))
+    Y1=np.empty((0,len(b)))
+    for i in phi:
+        array1 = []
+        array2 = []
+        array3 = []
+        array4 = []
+        for j in b:
+            def try1(XYX):
+                c1_try = c1(XYX,i,theta,r,t,M)
+                return c1_try
+            def try2(XYX):
+                c2_try = c2(XYX,i,theta,r,t,M)
+                return c2_try
+            sol1 = brentq(try1, np.pi,2*np.pi, xtol=2e-20,full_output=False, disp=True)
+            alpha1 = alpha(sol1,i,theta,r,t,M)
+            sol2 = brentq(try2, np.pi,2*np.pi, xtol=2e-20,full_output=False, disp=True)
+            alpha2 = alpha(sol2,i,theta,r,t,M)
+            if i >= 0 and i <= np.pi/2:
+                array1 = np.append(array1,j*np.cos(alpha1))
+                array3 = np.append(array3,j*np.cos(alpha2))
+            if i > np.pi/2 and i <= 3*np.pi/2:
+                array1 = np.append(array1,-j*np.cos(alpha1))
+                array3 = np.append(array3,-j*np.cos(alpha2))
+            if i > 3*np.pi/2 and i <= 2*np.pi:
+                array1 = np.append(array1,j*np.cos(alpha1))
+                array3 = np.append(array3,j*np.cos(alpha2))
+            array2 = np.append(array2,j*np.sin(alpha1))
+            array4 = np.append(array4,j*np.sin(alpha2))
+        X1 = np.vstack((X1,array1))
+        Y1 = np.vstack((Y1,array2))
+    return X1,Y1
+
+"""
+def custom_transform_secondary(b,phi,theta,t,M,r):
+    X1=np.empty((0,len(b)))
+    Y1=np.empty((0,len(b)))
+    for i in phi:
+        array1 = []
+        array2 = []
+        for j in b:
+            array1 = np.append(array1,j*np.cos(i)*np.cos(theta)/np.sqrt(1-np.sin(theta)**2*np.cos(i)**2))
+            array2 = np.append(array2,j*np.sin(i)/np.sqrt(1-np.sin(theta)**2*np.cos(i)**2))
+        X1 = np.vstack((X1,array1))
+        Y1 = np.vstack((Y1,array2))
+    return X1,Y1
+
+
+
+if __name__ == "__main__":
+    r = 20*M
+    r_array = [6*M,10*M,20*M,30*M,50*M]
+    phi_range = (0, 2*np.pi)
+
+    X_00, Y_00, R_00 = mesh(b_range, phi_range, b_points, phi_points,0,r,M,theta)
+    X_01, Y_01, R_01 = mesh1(b_range, phi_range, b_points, phi_points,0,r,M,theta)
+    #TRY_Z_6M = diff_primary(b_range, phi_range, b_points, phi_points, t_setup, 6*M, M, theta)
+    #TRY_Z_10M = diff_primary(b_range, phi_range, b_points, phi_points, t_setup, 10*M, M, theta)
+    #TRY_Z_20M = diff_primary(b_range, phi_range, b_points, phi_points, t_setup, 20*M, M, theta)
+    #TRY_Z_30M = diff_primary(b_range, phi_range, b_points, phi_points, t_setup, 30*M, M, theta)
+    #TRY_Z_50M = diff_primary(b_range, phi_range, b_points, phi_points, t_setup, 50*M, M, theta)
+    #TRY_Z_CLASS = diff1_primary(b_range, phi_range, b_points, phi_points, 0, r_array, M, theta)
+    #print(R_00)
+    print("--- %s seconds ---" % (time.time() - start_time))
+
+    #TRY_Z_QUAN = TRY_Z_6M + TRY_Z_10M + TRY_Z_20M + TRY_Z_30M + TRY_Z_50M
+    #DIFF = TRY_Z_QUAN -  TRY_Z_CLASS
+    #print(DIFF)
+
+
+    #x_01, y_01, R_01 = mesh1(b_range, phi_range, b_points, phi_points,0,r,M,theta)
+    #x_10, y_10, R_10 = mesh(b_range, phi_range, b_points, phi_points,t_setup,r_array[0],M,theta)
+    #x_11, y_11, R_11 = mesh1(b_range, phi_range, b_points, phi_points,t_setup,r_array[0],M,theta)
+    #x_20, y_20, R_20 = mesh(b_range, phi_range, b_points, phi_points,t_setup,r_array[1],M,theta)
+    #x_21, y_21, R_21 = mesh1(b_range, phi_range, b_points, phi_points,t_setup,r_array[1],M,theta)
+    #x_30, y_30, R_30 = mesh(b_range, phi_range, b_points, phi_points,t_setup,r_array[2],M,theta)
+    #x_31, y_31, R_31 = mesh1(b_range, phi_range, b_points, phi_points,t_setup,r_array[2],M,theta)
+    #x_40, y_40, R_40 = mesh(b_range, phi_range, b_points, phi_points,t_setup,r_array[3],M,theta)
+    #x_41, y_41, R_41 = mesh1(b_range, phi_range, b_points, phi_points,t_setup,r_array[3],M,theta)
+    #x_50, y_50, R_50 = mesh(b_range, phi_range, b_points, phi_points,t_setup,r_array[4],M,theta)
+    #x_51, y_51, R_51 = mesh1(b_range, phi_range, b_points, phi_points,t_setup,r_array[4],M,theta)
+
+    #plot the results
+
+    fig = plt.figure(dpi=600,figsize=(16,16))
+    ax = fig.add_subplot(111)
+
+    #plt.contour(X_10,y_10,R_10,[6*M],colors='black',label='primary corrected')
+    #plt.contour(x_11,y_11,R_11,[6*M],colors='green',label='secondary corrected')
+    #plt.contour(x_20,y_20,R_20,[10*M],colors='black')
+    #plt.contour(x_21,y_21,R_21,[10*M],colors='green')
+    #plt.contour(x_30,y_30,R_30,[20*M],colors='blue')
+    #plt.contour(x_31,y_31,R_31,[20*M],colors='green')
+    #plt.contour(x_40,y_40,R_40,[30*M],colors='blue')
+    #plt.contour(x_41,y_41,R_41,[30*M],colors='green')
+    #plt.contour(x_50,y_50,R_50,[50*M],colors='blue')
+    #plt.contour(x_51,y_51,R_51,[50*M],colors='green')
+
+    #CS = plt.contourf(x_00,y_00,DIFF, cmap=plt.cm.bone)
+    plt.contour(X_00,Y_00,R_00,[6*M,10*M,20*M,30*M,50*M],colors='red',linestyles='dashed')
+    #cbar = fig.colorbar(CS)
+    plt.contour(-X_01,Y_01,R_01 ,[6*M,10*M,20*M,30*M,50*M],colors='black',linestyles='dashed')
+    plt.legend()
+    plt.xlabel('Width/M')
+    plt.ylabel('Length/M')
+    plt.ylim(-100*M,100*M)
+    plt.xlim(-100*M,100*M)
+    plt.title('Quantum corrected blackhole')
+    plt.show()
+
+
